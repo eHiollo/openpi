@@ -13,6 +13,7 @@ from openpi_client import image_tools
 from openpi_client import websocket_client_policy as _websocket_client_policy
 import tqdm
 import tyro
+import datetime
 
 LIBERO_DUMMY_ACTION = [0.0] * 6 + [-1.0]
 LIBERO_ENV_RESOLUTION = 256  # resolution used to render training data
@@ -23,7 +24,7 @@ class Args:
     #################################################################################################################
     # Model server parameters
     #################################################################################################################
-    host: str = "0.0.0.0"
+    host: str = "192.168.1.100"
     port: int = 8000
     resize_size: int = 224
     replan_steps: int = 5
@@ -35,7 +36,7 @@ class Args:
         "libero_spatial"  # Task suite. Options: libero_spatial, libero_object, libero_goal, libero_10, libero_90
     )
     num_steps_wait: int = 10  # Number of steps to wait for objects to stabilize i n sim
-    num_trials_per_task: int = 50  # Number of rollouts per task
+    num_trials_per_task: int = 10  # Number of rollouts per task
 
     #################################################################################################################
     # Utils
@@ -55,6 +56,7 @@ def eval_libero(args: Args) -> None:
     num_tasks_in_suite = task_suite.n_tasks
     logging.info(f"Task suite: {args.task_suite_name}")
 
+    # Create output directory
     pathlib.Path(args.video_out_path).mkdir(parents=True, exist_ok=True)
 
     if args.task_suite_name == "libero_spatial":
@@ -70,10 +72,12 @@ def eval_libero(args: Args) -> None:
     else:
         raise ValueError(f"Unknown task suite: {args.task_suite_name}")
 
+    # Initialize model client
     client = _websocket_client_policy.WebsocketClientPolicy(args.host, args.port)
 
     # Start evaluation
     total_episodes, total_successes = 0, 0
+    #tqdm会显示进度条
     for task_id in tqdm.tqdm(range(num_tasks_in_suite)):
         # Get task
         task = task_suite.get_task(task_id)
@@ -91,6 +95,7 @@ def eval_libero(args: Args) -> None:
 
             # Reset environment
             env.reset()
+            # Initialize action plan，deque 提供双端序列
             action_plan = collections.deque()
 
             # Set initial states
@@ -111,9 +116,10 @@ def eval_libero(args: Args) -> None:
                         continue
 
                     # Get preprocessed image
-                    # IMPORTANT: rotate 180 degrees to match train preprocessing
+                    # IMPORTANT: rotate 180 degrees to match train preprocessing，ascontiguousarray确保图像在内存中是连续存储的,["agentview_image"]是获取obs观测字典中的"agentview_image",[::-1, ::-1]实现图像的旋转
                     img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
                     wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
+                    #图像格式转换和调整大小
                     img = image_tools.convert_to_uint8(
                         image_tools.resize_with_pad(img, args.resize_size, args.resize_size)
                     )
@@ -123,10 +129,12 @@ def eval_libero(args: Args) -> None:
 
                     # Save preprocessed image for replay video
                     replay_images.append(img)
-
+                    
+                    #如果action_plan为空，python里面空列表、空字符串、0、None等都被认为是False
                     if not action_plan:
                         # Finished executing previous action chunk -- compute new chunk
                         # Prepare observations dict
+                        # 推理模型的输入
                         element = {
                             "observation/image": img,
                             "observation/wrist_image": wrist_img,
@@ -141,15 +149,21 @@ def eval_libero(args: Args) -> None:
                         }
 
                         # Query model to get action
+                        # infer返回一个字典，里面包含"actions"键，取出对应的值传给action_chunk
                         action_chunk = client.infer(element)["actions"]
+                        # Ensure that the model returned enough actions
+                        # assert断言语句，如果条件不满足则抛出异常并显示后面的错误信息
                         assert (
                             len(action_chunk) >= args.replan_steps
                         ), f"We want to replan every {args.replan_steps} steps, but policy only predicts {len(action_chunk)} steps."
+                        # 获取的action_chunk不直接执行，而是把前replan_steps的动作放入action_plan
                         action_plan.extend(action_chunk[: args.replan_steps])
-
+                    
+                    # popleft()从action_plan的左侧弹出一个动作
                     action = action_plan.popleft()
 
                     # Execute action in environment
+                    # action是一个numpy数组，tolist()将其转换为列表
                     obs, reward, done, info = env.step(action.tolist())
                     if done:
                         task_successes += 1
@@ -165,10 +179,16 @@ def eval_libero(args: Args) -> None:
             total_episodes += 1
 
             # Save a replay video of the episode
+            # suffix用于区分成功和失败的回放视频
             suffix = "success" if done else "failure"
+            # 将任务描述中的空格替换为下划线，以便用作文件名的一部分
             task_segment = task_description.replace(" ", "_")
+
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            # mimwrite=mult-image write，将多张图片写入一个视频文件
             imageio.mimwrite(
-                pathlib.Path(args.video_out_path) / f"rollout_{task_segment}_{suffix}.mp4",
+                pathlib.Path(args.video_out_path) / f"rollout_{task_segment}_{suffix}_{timestamp}.mp4",
+                # 将replay_images中的每一帧转换为numpy数组
                 [np.asarray(x) for x in replay_images],
                 fps=10,
             )
