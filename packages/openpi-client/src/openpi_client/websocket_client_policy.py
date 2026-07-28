@@ -41,7 +41,19 @@ class WebsocketClientPolicy(_base_policy.BasePolicy):
                 time.sleep(5)
 
     @override
-    def infer(self, obs: Dict) -> Dict:  # noqa: UP006
+    def infer(self, obs: Dict, *, sample_n: int = 1) -> Dict:  # noqa: UP006
+        """Run inference.
+
+        Args:
+            obs: Observation dict.
+            sample_n: When > 1, requests the server to sample multiple candidate
+                action chunks in one batched forward pass (AsyncVLA). The returned
+                ``actions`` then has shape (sample_n, horizon, dim). Defaults to 1,
+                which preserves the original protocol and behavior.
+        """
+        if sample_n > 1:
+            obs = dict(obs)
+            obs["sample_n"] = int(sample_n)
         data = self._packer.pack(obs)
         self._ws.send(data)
         response = self._ws.recv()

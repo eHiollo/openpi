@@ -60,6 +60,16 @@ class WebsocketPolicyServer:
             try:
                 start_time = time.monotonic()
                 obs = msgpack_numpy.unpackb(await websocket.recv())
+
+                # AsyncVLA: optional client-requested batched sampling. Popped before
+                # inference so it never reaches the observation transforms.
+                sample_n = 1
+                if isinstance(obs, dict):
+                    try:
+                        sample_n = max(1, int(obs.pop("sample_n", 1)))
+                    except (TypeError, ValueError):
+                        sample_n = 1
+
                 # Log received observation keys and a small sample for debugging.
                 try:
                     logger.info("Received obs from %s keys=%s", websocket.remote_address, list(obs.keys()) if isinstance(obs, dict) else None)
@@ -80,7 +90,10 @@ class WebsocketPolicyServer:
                     logger.exception("Failed to log incoming obs")
 
                 infer_time = time.monotonic()
-                action = self._policy.infer(obs)
+                if sample_n > 1:
+                    action = self._policy.infer(obs, sample_n=sample_n)
+                else:
+                    action = self._policy.infer(obs)
                 infer_time = time.monotonic() - infer_time
 
                 # Log action keys and a small sample for debugging.

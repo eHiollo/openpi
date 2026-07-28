@@ -95,13 +95,18 @@ class A10Inputs(transforms.DataTransformFn):
 
 @dataclasses.dataclass(frozen=True)
 class A10Outputs(transforms.DataTransformFn):
-    """Returns only valid A10 action dimensions."""
+    """Returns only valid A10 action dimensions.
+
+    Accepts either a single action chunk [T, 7+] or a batched set of
+    candidates [N, T, 7+] (AsyncVLA sample_n > 1); slicing applies to the
+    last dimension in both cases.
+    """
 
     def __call__(self, data: dict) -> dict:
         actions = np.asarray(data["actions"], dtype=np.float32)
 
-        if actions.ndim != 2:
-            raise ValueError(f"Expected actions to have shape [T, 7+], got {actions.shape}")
+        if actions.ndim not in (2, 3):
+            raise ValueError(f"Expected actions to have shape [T, 7+] or [N, T, 7+], got {actions.shape}")
 
-        return {"actions": actions[:, :7]}
+        return {"actions": actions[..., :7]}
 

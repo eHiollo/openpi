@@ -65,7 +65,21 @@ class Policy(BasePolicy):
             self._rng = rng or jax.random.key(0)
 
     @override
-    def infer(self, obs: dict, *, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
+    def infer(self, obs: dict, *, noise: np.ndarray | None = None, sample_n: int = 1) -> dict:  # type: ignore[misc]
+        """Run inference.
+
+        Args:
+            obs: Observation dict.
+            noise: Optional fixed noise for action sampling (flow matching / diffusion).
+            sample_n: Number of candidate action chunks to sample in a single batched
+                forward pass (AsyncVLA test-time compute). The observation is broadcast
+                to batch=sample_n so the backbone runs in parallel on GPU; the model
+                draws independent noise per candidate. When sample_n <= 1 the behavior
+                is identical to the original single-sample path, and the returned
+                ``actions`` has shape (horizon, dim); otherwise (sample_n, horizon, dim).
+        """
+        sample_n = max(1, int(sample_n))
+
         # Make a copy since transformations may modify the inputs in place.
         inputs = jax.tree.map(lambda x: x, obs)
         inputs = self._input_transform(inputs)
@@ -73,10 +87,14 @@ class Policy(BasePolicy):
             # Make a batch and convert to jax.Array.
             inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
             self._rng, sample_rng_or_pytorch_device = jax.random.split(self._rng)
+            if sample_n > 1:
+                inputs = jax.tree.map(lambda x: jnp.repeat(x, sample_n, axis=0), inputs)
         else:
             # Convert inputs to PyTorch tensors and move to correct device
             inputs = jax.tree.map(lambda x: torch.from_numpy(np.array(x)).to(self._pytorch_device)[None, ...], inputs)
             sample_rng_or_pytorch_device = self._pytorch_device
+            if sample_n > 1:
+                inputs = jax.tree.map(lambda x: x.repeat(sample_n, *([1] * (x.ndim - 1))), inputs)
 
         # Prepare kwargs for sample_actions
         sample_kwargs = dict(self._sample_kwargs)
@@ -85,6 +103,15 @@ class Policy(BasePolicy):
 
             if noise.ndim == 2:  # If noise is (action_horizon, action_dim), add batch dimension
                 noise = noise[None, ...]  # Make it (1, action_horizon, action_dim)
+            if sample_n > 1:
+                if noise.shape[0] == 1:
+                    noise = (
+                        noise.repeat(sample_n, *([1] * (noise.ndim - 1)))
+                        if self._is_pytorch_model
+                        else jnp.repeat(noise, sample_n, axis=0)
+                    )
+                elif noise.shape[0] != sample_n:
+                    raise ValueError(f"noise batch ({noise.shape[0]}) must be 1 or sample_n ({sample_n})")
             sample_kwargs["noise"] = noise
 
         observation = _model.Observation.from_dict(inputs)
@@ -95,14 +122,19 @@ class Policy(BasePolicy):
         }
         model_time = time.monotonic() - start_time
         if self._is_pytorch_model:
-            outputs = jax.tree.map(lambda x: np.asarray(x[0, ...].detach().cpu()), outputs)
+            outputs = jax.tree.map(lambda x: np.asarray(x.detach().cpu()), outputs)
         else:
-            outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
+            outputs = jax.tree.map(lambda x: np.asarray(x), outputs)
+        if sample_n == 1:
+            # Original behavior: squeeze the batch dimension.
+            outputs = jax.tree.map(lambda x: x[0, ...], outputs)
 
         outputs = self._output_transform(outputs)
         outputs["policy_timing"] = {
             "infer_ms": model_time * 1000,
         }
+        if sample_n > 1:
+            outputs["sample_n"] = sample_n
         return outputs
 
     @property
@@ -122,8 +154,8 @@ class PolicyRecorder(_base_policy.BasePolicy):
         self._record_step = 0
 
     @override
-    def infer(self, obs: dict) -> dict:  # type: ignore[misc]
-        results = self._policy.infer(obs)
+    def infer(self, obs: dict, **kwargs) -> dict:  # type: ignore[misc]
+        results = self._policy.infer(obs, **kwargs)
 
         data = {"inputs": obs, "outputs": results}
         data = flax.traverse_util.flatten_dict(data, sep="/")
