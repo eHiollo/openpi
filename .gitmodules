@@ -1,0 +1,4 @@
+[submodule "third_party/A10_new"]
+	path = third_party/A10_new
+	url = https://github.com/eHiollo/A10_new.git
+	branch = dev/async-inference
