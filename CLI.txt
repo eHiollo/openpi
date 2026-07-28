@@ -7,6 +7,32 @@ XLA_PYTHON_CLIENT_MEM_FRACTION=0.5 \
   --policy.dir=checkpoints/pi05_a10_finetune/Reach_5_9_1/130000
 
 
+--------启动机器人端 (A10_new, TCP:8080)----------
+ # 编译并启动 kaanhbin（CLI 端口 5866，策略 TCP 端口 8080）
+ cd $HOME/Allen/openpi/third_party/A10_new && cmake -B build && cmake --build build
+ ./build/bin/kaanhbin 5866
+ # 在 Aris CLI 里执行 policy 启动策略驱动：
+ #   policy
+ # 停止策略/VR：在 CLI 执行 stop，或桥接器 Ctrl+C 自动发 STOP_POLICY
+
+
+--------启动 VLA 桥接器 (异步推理, 机器人 PC 上运行)----------
+ # 需要 conda 环境 client（含 opencv/websockets/msgpack），或 pip install -r requirements.txt
+ conda activate client
+ cd $HOME/Allen/openpi/third_party/A10_new/client
+ # 异步双缓冲（推荐）：推理与执行重叠，消除 batch 间 GPU 空闲间隙
+ python3 run_bridge.py \
+  --policy-host <GPU_IP> --policy-port 8000 \
+  --robot-host 127.0.0.1 --robot-port 8080 \
+  --mode async --camera-mode threaded \
+  --hz 10 --start-delay 1.0
+ # 对比/回退：
+ #   --mode sync              原同步模式
+ #   --camera-mode exclusive  多相机同 USB 总线掉帧时的 fallback
+ # 也可从仓库根目录运行：python client/run_bridge.py ... 或 python -m client.run_bridge ...
+ # 停止：Ctrl+C（自动发 STOP_POLICY 停机器人并关连接）
+
+
 --------处理数据并计算norm----------
 # 若 data/videos 为「多集合并成少量 file-000..file-006」而非每集一个 file-XXX，先重排：
 #   uv run python scripts/resplit_lerobot_a10_per_episode.py --dataset-root dataset/a10_dataset_4_22
@@ -21,7 +47,7 @@ XLA_PYTHON_CLIENT_MEM_FRACTION=0.5 \
   --exp-name Reach_5_9_1 \
   --resume
 --------tmux----------
-  进入会话：tmux attach -t reach_4_13_1
-  临时离开（不停止训练）：按 Ctrl+b 然后 d
-  查看会话列表：tmux ls
-  停止训练并关闭会话：tmux kill-session -t reach_4_13_1
+ 进入会话：tmux attach -t reach_4_13_1
+ 临时离开（不停止训练）：按 Ctrl+b 然后 d
+ 查看会话列表：tmux ls
+ 停止训练并关闭会话：tmux kill-session -t reach_4_13_1
