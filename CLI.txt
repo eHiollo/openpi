@@ -1,3 +1,15 @@
+--------不接机器人, 测 A10 推理速度----------
+ # 终端 1：启动 policy server（与真机相同的 checkpoint）
+ cd $HOME/Allen/openpi
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.5 \
+ HF_LEROBOT_HOME=$HOME/Allen/openpi HF_DATASETS_OFFLINE=1 HF_HUB_OFFLINE=1 \
+ uv run scripts/serve_policy.py policy:checkpoint \
+  --policy.config=pi05_a10_finetune \
+  --policy.dir=checkpoints/pi05_a10_finetune/Reach_5_9_1/130000
+ # 终端 2：发随机观测压测（默认 20 次，不含模型加载的 2 次预热）
+ uv run examples/simple_client/main.py --env A10 --host 127.0.0.1 --port 8000 --num-steps 20
+
+
 --------启动server----------
  cd $HOME/Allen/openpi
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.5 \
@@ -31,6 +43,29 @@ XLA_PYTHON_CLIENT_MEM_FRACTION=0.5 \
  #   --camera-mode exclusive  多相机同 USB 总线掉帧时的 fallback
  # 也可从仓库根目录运行：python client/run_bridge.py ... 或 python -m client.run_bridge ...
  # 停止：Ctrl+C（自动发 STOP_POLICY 停机器人并关连接）
+
+
+--------数据集回放验证（5090 → 机器人 192.168.1.12:8080）----------
+ # 机器人：git checkout dev/async-inference && git pull（含 chunk 间接缝 retarget）后编 kaanhbin
+ # CLI：policy -x=2 -a=0.15 ；姿态接近 ep15 起点
+ cd $HOME/Allen/openpi
+ # 同步（已测通）：走完一段 → 假推理 ~68ms（臂停着）→ 再发下一段
+ uv run python third_party/A10_new/client/run_bridge.py \
+  --policy replay --mode sync --no-camera \
+  --replay-dataset $HOME/Allen/openpi/dataset/dataset_5_9 \
+  --replay-episode 15 \
+  --robot-host 192.168.1.12 --robot-port 8080 \
+  --robot-timeout 5 --hz 0 --start-delay 1.0
+ # 异步（真正 receding horizon）：执行 chunk N 时采 obs → ~68ms 推出 N+1 → 替换未走完队列；驱动从当前指令接到新队首
+ uv run python third_party/A10_new/client/run_bridge.py \
+  --policy replay --mode async --no-camera \
+  --replay-dataset $HOME/Allen/openpi/dataset/dataset_5_9 \
+  --replay-episode 15 \
+  --robot-host 192.168.1.12 --robot-port 8080 \
+  --robot-timeout 5 --hz 0 --start-delay 1.0 \
+  --monitor-hz 5
+ # 成功判据：从第二段起日志 rem_before>0；机器人打印 retarget mid-segment；段间不应再有 ~68ms queue_empty。
+ # 回放正常结束不发 STOP_POLICY。Ctrl+C 才停。
 
 
 --------处理数据并计算norm----------
