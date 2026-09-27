@@ -21,6 +21,7 @@ class EnvMode(enum.Enum):
     ALOHA_SIM = "aloha_sim"
     DROID = "droid"
     LIBERO = "libero"
+    A10 = "a10"
 
 
 @dataclasses.dataclass
@@ -120,6 +121,7 @@ def main(args: Args) -> None:
         EnvMode.ALOHA_SIM: _random_observation_aloha,
         EnvMode.DROID: _random_observation_droid,
         EnvMode.LIBERO: _random_observation_libero,
+        EnvMode.A10: _random_observation_a10,
     }[args.env]
 
     policy = _websocket_client_policy.WebsocketClientPolicy(
@@ -179,6 +181,16 @@ def _random_observation_libero() -> dict:
         "observation/image": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
         "observation/wrist_image": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
         "prompt": "do something",
+    }
+
+
+def _random_observation_a10() -> dict:
+    # Matches current A10 VR training: 7-D state (6 joints + gripper) + single wrist camera.
+    wrist = np.random.randint(256, size=(3, 224, 224), dtype=np.uint8)
+    return {
+        "observation/state": np.random.rand(7).astype(np.float32),
+        "observation/images/right": wrist,
+        "prompt": "pick_and_place",
     }
 
 

@@ -4,24 +4,45 @@ XLA_PYTHON_CLIENT_MEM_FRACTION=0.5 \
  HF_LEROBOT_HOME=$HOME/Allen/openpi HF_DATASETS_OFFLINE=1 HF_HUB_OFFLINE=1 \
  uv run scripts/serve_policy.py policy:checkpoint \
   --policy.config=pi05_a10_finetune \
-  --policy.dir=checkpoints/pi05_a10_finetune/Reach_5_9_1/130000
+  --policy.dir=checkpoints/pi05_a10_finetune/a10_vr_9_21_4/50000
 
 
 --------处理数据并计算norm----------
-# 若 data/videos 为「多集合并成少量 file-000..file-006」而非每集一个 file-XXX，先重排：
-#   uv run python scripts/resplit_lerobot_a10_per_episode.py --dataset-root dataset/a10_dataset_4_22
-#   uv run python scripts/repair_lerobot_dataset_meta.py --dataset-root dataset/a10_dataset_4_22
-# 仅修正分集视频（与 parquet 帧数严格对齐、PyAV 重编码，不改 parquet）：
-#   uv run python scripts/resplit_lerobot_a10_per_episode.py --dataset-root dataset/a10_dataset_4_22 --videos-only
- HF_LEROBOT_HOME=$HOME/Allen/openpi uv run scripts/compute_norm_stats.py --config-name pi05_a10_finetune --max-frames 64
+# 新采集的 LeRobot v3 数据需先转成当前环境的 v2.1 布局：
+#   uv run python scripts/convert_lerobot_v3_to_v21.py --dataset-root dataset/a10_vr_9_21_4
+#   uv run python scripts/repair_lerobot_dataset_meta.py --dataset-root dataset/a10_vr_9_21_4
+ HF_LEROBOT_HOME=$HOME/Allen/openpi uv run scripts/compute_norm_stats.py --config-name pi05_a10_finetune
 
 --------启动训练----------
  XLA_PYTHON_CLIENT_MEM_FRACTION=0.85 \
  HF_LEROBOT_HOME=$HOME/Allen/openpi uv run scripts/train.py pi05_a10_finetune \
-  --exp-name Reach_5_9_1 \
-  --resume
+  --exp-name a10_vr_9_21_4 \
+  --num-train-steps 50000 \
+  --save-interval 5000
+
+--------本机压测推理----------
+ uv run examples/simple_client/main.py --env A10 --host 127.0.0.1 --port 8000 --num-steps 20
+
+--------桥接器（单腕部相机）----------
+ conda activate client
+ cd $HOME/Allen/openpi/third_party/A10_new/client
+ python run_bridge.py --policy-host 127.0.0.1 --policy-port 8000 \
+   --mode async --camera-mode threaded --top-camera="" --prompt pick_and_place
+
 --------tmux----------
-  进入会话：tmux attach -t reach_4_13_1
+  进入会话：tmux attach -t a10_vr_9_11_3
   临时离开（不停止训练）：按 Ctrl+b 然后 d
   查看会话列表：tmux ls
-  停止训练并关闭会话：tmux kill-session -t reach_4_13_1
+  停止训练并关闭会话：tmux kill-session -t a10_vr_9_11_3
+
+已完成工作
+  硬件设施搭建完成，能实现遥操作，但遥操作使用效果欠佳
+  数据采集链路打通，并采集了测试数据
+  在学校电脑上进行了模型训练测试
+  thor模型推理环境配置完成，完成了测试
+
+后续工作
+  遥操作效果优化/算法改进 2d    ddl:2026.9.18
+  数据采集+模型训练      1.5d  ddl：2026.9.19
+  实机部署测试           0.5d  ddl:2026.9.22
+

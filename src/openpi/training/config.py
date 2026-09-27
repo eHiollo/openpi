@@ -465,7 +465,12 @@ class LeRobotA10DataConfig(DataConfigFactory):
     use_delta_joint_actions: bool = True
     # Default action sequence keys when use_state_as_action_targets is False.
     action_sequence_keys: Sequence[str] = ("action",)
-    default_prompt: str | None = "Reach the yellow lemon"
+    default_prompt: str | None = "pick_and_place"
+    # RepackTransform dest -> dataset source. Only list cameras that exist in the dataset.
+    image_repack: Sequence[tuple[str, str]] = (
+        ("observation/images/top", "observation.images.base_0_rgb"),
+        ("observation/images/right", "observation.images.right_wrist_0_rgb"),
+    )
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -476,17 +481,14 @@ class LeRobotA10DataConfig(DataConfigFactory):
             action_key = "action"
             action_sequence_keys = self.action_sequence_keys
 
+        repack_structure = {
+            "observation/state": "observation.state",
+            "actions": action_key,
+        }
+        repack_structure.update(dict(self.image_repack))
         repack_transform = _transforms.Group(
             inputs=[
-                _transforms.RepackTransform(
-                    {
-                        # RepackTransform maps new keys -> source keys.
-                        "observation/state": "observation.state",
-                        "observation/images/right": "observation.images.right",
-                        "observation/images/top": "observation.images.top",
-                        "actions": action_key,
-                    }
-                )
+                _transforms.RepackTransform(repack_structure)
             ]
         )
         data_transforms = _transforms.Group(
@@ -978,21 +980,26 @@ _CONFIGS = [
             max_token_len=128,
         ),
         data=LeRobotA10DataConfig(
-            # Replace with your A10 LeRobot dataset repo id.
-            repo_id="dataset/dataset_5_9",
-            # Your current dataset does not include text tasks/prompts, so keep this disabled.
+            repo_id="dataset/a10_vr_9_21_4",
+            # Dataset task is stored separately; inject default_prompt instead.
             base_config=DataConfig(prompt_from_task=False),
-            # Use A10 dataset-specific normalization stats (do not reuse DROID stats).
+            use_state_as_action_targets=True,
+            use_delta_joint_actions=True,
+            default_prompt="pick_and_place",
+            image_repack=(
+                ("observation/images/top", "observation.images.base_0_rgb"),
+                ("observation/images/right", "observation.images.right_wrist_0_rgb"),
+            ),
         ),
-        #weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        weight_loader=weight_loaders.CheckpointWeightLoader("./checkpoints/pi05_a10_finetune/Reach_4_25_1/90000/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        #weight_loader=weight_loaders.CheckpointWeightLoader("./checkpoints/pi05_a10_finetune/Reach_5_9_1/130000/params"),
         # Freeze everything except action-expert LoRA parameters.
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
         ema_decay=None,
-        num_train_steps=200_000,
+        num_train_steps=50_000,
         save_interval=5000,
         keep_period=10_000,
         batch_size=8,

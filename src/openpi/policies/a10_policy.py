@@ -15,6 +15,38 @@ def _parse_image(image) -> np.ndarray:
     return image
 
 
+def _lookup_nested(data: dict, dotted_or_slashed: str):
+    """Return a value from either a flat 'a/b/c' key or nested dicts."""
+    if dotted_or_slashed in data:
+        return data[dotted_or_slashed]
+    cur: object = data
+    for part in dotted_or_slashed.replace(".", "/").split("/"):
+        if not isinstance(cur, dict) or part not in cur:
+            return None
+        cur = cur[part]
+    return cur
+
+
+def _first_image(data: dict, *keys: str):
+    for key in keys:
+        value = _lookup_nested(data, key)
+        if value is not None:
+            return value
+    return None
+
+
+def make_a10_example(*, include_top: bool = False) -> dict:
+    """Random A10 observation matching the current single-wrist training layout."""
+    example = {
+        "observation/state": np.random.rand(7).astype(np.float32),
+        "observation/images/right": np.random.randint(256, size=(3, 224, 224), dtype=np.uint8),
+        "prompt": "pick_and_place",
+    }
+    if include_top:
+        example["observation/images/top"] = np.random.randint(256, size=(3, 224, 224), dtype=np.uint8)
+    return example
+
+
 @dataclasses.dataclass(frozen=True)
 class A10Inputs(transforms.DataTransformFn):
     """Transforms A10 dataset fields into the common pi model input format."""
@@ -22,7 +54,12 @@ class A10Inputs(transforms.DataTransformFn):
     model_type: _model.ModelType
 
     def __call__(self, data: dict) -> dict:
-        state_trajectory = np.asarray(data["observation/state"], dtype=np.float32)
+        state_raw = data.get("observation/state")
+        if state_raw is None:
+            state_raw = _lookup_nested(data, "observation.state")
+        if state_raw is None:
+            raise KeyError("Missing observation/state")
+        state_trajectory = np.asarray(state_raw, dtype=np.float32)
 
         if state_trajectory.ndim == 2:
             state = state_trajectory[0].copy()
@@ -33,15 +70,22 @@ class A10Inputs(transforms.DataTransformFn):
                 f"Expected observation/state to have shape [T, 7] or [7], got {state_trajectory.shape}"
             )
 
-        # Base / scene RGB: training used `observation.images.top`; clients may send
-        # `observation/images/base_camera` instead (same model slot: base_0_rgb).
-        top_raw = data.get("observation/images/top")
-        base_camera_raw = data.get("observation/images/base_camera")
-        if top_raw is not None:
-            primary_base_raw = top_raw
-        else:
-            primary_base_raw = base_camera_raw
-        right_raw = data.get("observation/images/right")
+        # Scene camera (optional). Single-cam A10 VR data only has the wrist view.
+        primary_base_raw = _first_image(
+            data,
+            "observation/images/top",
+            "observation/images/base_camera",
+            "observation.images.top",
+            "observation.images.base_camera",
+        )
+        # Wrist camera: dataset key is observation.images.right_wrist_0_rgb.
+        right_raw = _first_image(
+            data,
+            "observation/images/right",
+            "observation/images/right_wrist_0_rgb",
+            "observation.images.right",
+            "observation.images.right_wrist_0_rgb",
+        )
         ref_raw = primary_base_raw if primary_base_raw is not None else right_raw
         if ref_raw is None:
             ref_hwc = np.zeros((224, 224, 3), dtype=np.uint8)
