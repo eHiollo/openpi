@@ -4,7 +4,7 @@ XLA_PYTHON_CLIENT_MEM_FRACTION=0.5 \
  HF_LEROBOT_HOME=$HOME/Allen/openpi HF_DATASETS_OFFLINE=1 HF_HUB_OFFLINE=1 \
  uv run scripts/serve_policy.py policy:checkpoint \
   --policy.config=pi05_a10_finetune \
-  --policy.dir=checkpoints/pi05_a10_finetune/a10_vr_9_21_4/50000
+  --policy.dir=checkpoints/pi05_a10_finetune/a10_vr_9_21_4_h30/49999
 
 
 --------处理数据并计算norm----------
@@ -16,9 +16,11 @@ XLA_PYTHON_CLIENT_MEM_FRACTION=0.5 \
 --------启动训练----------
  XLA_PYTHON_CLIENT_MEM_FRACTION=0.85 \
  HF_LEROBOT_HOME=$HOME/Allen/openpi uv run scripts/train.py pi05_a10_finetune \
-  --exp-name a10_vr_9_21_4 \
-  --num-train-steps 50000 \
-  --save-interval 5000
+  --exp-name a10_vr_9_21_4_h30 \
+  --resume \
+  --num-train-steps 100000 \
+  --save-interval 10000 \
+  --keep-period 1
 
 --------本机压测推理----------
  uv run examples/simple_client/main.py --env A10 --host 127.0.0.1 --port 8000 --num-steps 20
@@ -27,7 +29,7 @@ XLA_PYTHON_CLIENT_MEM_FRACTION=0.5 \
  conda activate client
  cd $HOME/Allen/openpi/third_party/A10_new/client
  python run_bridge.py --policy-host 127.0.0.1 --policy-port 8000 \
-   --mode async --camera-mode threaded --top-camera="" --prompt pick_and_place
+   --mode async --camera-mode threaded --top-camera="" --prompt "Grasp the bottle, place it into the box beside it, close the lid, and return the robot arm to its initial position."
 
 --------tmux----------
   进入会话：tmux attach -t a10_vr_9_11_3

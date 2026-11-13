@@ -40,7 +40,10 @@ def make_a10_example(*, include_top: bool = False) -> dict:
     example = {
         "observation/state": np.random.rand(7).astype(np.float32),
         "observation/images/right": np.random.randint(256, size=(3, 224, 224), dtype=np.uint8),
-        "prompt": "pick_and_place",
+        "prompt": (
+            "Grasp the bottle, place it into the box beside it, close the lid, "
+            "and return the robot arm to its initial position."
+        ),
     }
     if include_top:
         example["observation/images/top"] = np.random.randint(256, size=(3, 224, 224), dtype=np.uint8)

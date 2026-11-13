@@ -190,7 +190,10 @@ def _random_observation_a10() -> dict:
     return {
         "observation/state": np.random.rand(7).astype(np.float32),
         "observation/images/right": wrist,
-        "prompt": "pick_and_place",
+        "prompt": (
+            "Grasp the bottle, place it into the box beside it, close the lid, "
+            "and return the robot arm to its initial position."
+        ),
     }
 
 

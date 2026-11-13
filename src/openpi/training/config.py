@@ -465,7 +465,10 @@ class LeRobotA10DataConfig(DataConfigFactory):
     use_delta_joint_actions: bool = True
     # Default action sequence keys when use_state_as_action_targets is False.
     action_sequence_keys: Sequence[str] = ("action",)
-    default_prompt: str | None = "pick_and_place"
+    default_prompt: str | None = (
+        "Grasp the bottle, place it into the box beside it, close the lid, "
+        "and return the robot arm to its initial position."
+    )
     # RepackTransform dest -> dataset source. Only list cameras that exist in the dataset.
     image_repack: Sequence[tuple[str, str]] = (
         ("observation/images/top", "observation.images.base_0_rgb"),
@@ -976,7 +979,7 @@ _CONFIGS = [
             action_expert_variant="gemma_300m_lora",
             # Must match pi05_base checkpoint (32). Real A10 actions are 7-D; ModelTransformFactory pads to action_dim.
             action_dim=32,
-            action_horizon=10,
+            action_horizon=30,
             max_token_len=128,
         ),
         data=LeRobotA10DataConfig(
@@ -985,7 +988,10 @@ _CONFIGS = [
             base_config=DataConfig(prompt_from_task=False),
             use_state_as_action_targets=True,
             use_delta_joint_actions=True,
-            default_prompt="pick_and_place",
+            default_prompt=(
+                "Grasp the bottle, place it into the box beside it, close the lid, "
+                "and return the robot arm to its initial position."
+            ),
             image_repack=(
                 ("observation/images/top", "observation.images.base_0_rgb"),
                 ("observation/images/right", "observation.images.right_wrist_0_rgb"),
@@ -999,9 +1005,11 @@ _CONFIGS = [
             action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
         ema_decay=None,
-        num_train_steps=50_000,
-        save_interval=5000,
-        keep_period=10_000,
+        num_train_steps=100_000,
+        save_interval=10_000,
+        # max_to_keep is 1. keep_period=1 retains every saved step, including the
+        # earlier 3000-step checkpoints from the first 50k run.
+        keep_period=1,
         batch_size=8,
     ),
     #
