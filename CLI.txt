@@ -48,3 +48,44 @@ XLA_PYTHON_CLIENT_MEM_FRACTION=0.5 \
   数据采集+模型训练      1.5d  ddl：2026.9.19
   实机部署测试           0.5d  ddl:2026.9.22
 
+--------双臂叠衣服：a10_dua_1113_v21----------
+# 当前样本已补齐缺失的 meta/episodes_stats.jsonl（轨迹真实统计及视频采样统计）。
+# parquet 的 HF 特征描述已从 List 兼容为 Sequence，表内数据等价；
+# 原文件备份：dataset/a10_dua_1113_v21/_compat_original/data/。
+# tasks.jsonl 与原始轨迹值保持不变；训练提示词由配置注入。
+# 上传完成并验证数据后，独立计算统计（CPU，避免占用训练显存）。
+HF_LEROBOT_HOME=$HOME/Allen/openpi HF_DATASETS_OFFLINE=1 HF_HUB_OFFLINE=1 \
+  JAX_PLATFORMS=cpu uv run scripts/compute_norm_stats.py --config-name pi05_a10_dual_finetune
+
+# 10 步管线验证：新实验，不加 --resume，不覆盖已有实验。
+# 2026-11-13：在已有约 9.4 GiB GPU 占用、fraction=0.5 的环境下，
+# batch size 2 和 1 均在第一个训练步 OOM，未产生有效检查点或损失记录。
+# 随后停止原推理服务、释放显存后，以 fraction=0.85、batch size 2 完成了 10 步验证。
+# 成功实验：a10_dua_1113_fold_h30_smoke_retry，检查点：9；损失与梯度均为有限值。
+# 日志：/tmp/a10_dual_smoke_retry.log。再次验证请更换实验名，避免覆盖已有结果。
+# 编译估算约需 16 GiB；以下重试命令仅在其他 GPU 作业结束、显存足够后运行。
+# 使用 fraction=0.85 和新实验目录；不停止其他进程，不覆盖失败目录。
+# 若 batch size 2 显存不足，换一个新实验名并使用 --batch-size 1 重试。
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.85 \
+  HF_LEROBOT_HOME=$HOME/Allen/openpi HF_DATASETS_OFFLINE=1 HF_HUB_OFFLINE=1 \
+  uv run scripts/train.py pi05_a10_dual_finetune \
+  --exp-name a10_dua_1113_fold_h30_smoke_retry --batch-size 2 \
+  --num-train-steps 10 --log-interval 1 --save-interval 10 --num-workers 0 --no-wandb-enabled
+
+# 生成训练侧适配模型：默认 10 步、batch size 2，最后检查点为 9。
+# 保存 params、train_state 和独立 norm_stats；真实任务训练需显式增加步数。
+# 确认 GPU 空闲后运行；目录已存在时换新实验名，不覆盖已有模型。
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.85 \
+  HF_LEROBOT_HOME=$HOME/Allen/openpi HF_DATASETS_OFFLINE=1 HF_HUB_OFFLINE=1 \
+  uv run scripts/train.py pi05_a10_dual_finetune --exp-name a10_dua_1113_fold_h30
+
+# 适配模型生成后可启动服务，默认 10 步训练的最后检查点为 9。
+# 服务输入：14 维 observation/state（左臂7维在前），以及
+# observation/images/top、observation/images/left、observation/images/right 三路图像。
+# 推理时省略 prompt 可使用配置默认叠衣服指令；输出为 [30, 14] 绝对关节/夹爪目标。
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.5 \
+  HF_LEROBOT_HOME=$HOME/Allen/openpi HF_DATASETS_OFFLINE=1 HF_HUB_OFFLINE=1 \
+  uv run scripts/serve_policy.py policy:checkpoint \
+  --policy.config=pi05_a10_dual_finetune \
+  --policy.dir=checkpoints/pi05_a10_dual_finetune/a10_dua_1113_fold_h30/9
+

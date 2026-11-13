@@ -1,4 +1,5 @@
 import dataclasses
+
 import einops
 import numpy as np
 
@@ -55,6 +56,11 @@ class A10Inputs(transforms.DataTransformFn):
     """Transforms A10 dataset fields into the common pi model input format."""
 
     model_type: _model.ModelType
+    action_dim: int = 7
+
+    def __post_init__(self):
+        if self.action_dim not in (7, 14):
+            raise ValueError("A10 action_dim must be 7 or 14")
 
     def __call__(self, data: dict) -> dict:
         state_raw = data.get("observation/state")
@@ -64,14 +70,16 @@ class A10Inputs(transforms.DataTransformFn):
             raise KeyError("Missing observation/state")
         state_trajectory = np.asarray(state_raw, dtype=np.float32)
 
-        if state_trajectory.ndim == 2:
-            state = state_trajectory[0].copy()
-        elif state_trajectory.ndim == 1:
-            state = state_trajectory.copy()
-        else:
+        if (
+            state_trajectory.ndim not in (1, 2)
+            or state_trajectory.shape[-1] != self.action_dim
+            or state_trajectory.size == 0
+        ):
             raise ValueError(
-                f"Expected observation/state to have shape [T, 7] or [7], got {state_trajectory.shape}"
+                f"Expected observation/state shape [T, {self.action_dim}] or [{self.action_dim}], "
+                f"got {state_trajectory.shape}"
             )
+        state = state_trajectory[0].copy() if state_trajectory.ndim == 2 else state_trajectory.copy()
 
         # Scene camera (optional). Single-cam A10 VR data only has the wrist view.
         primary_base_raw = _first_image(
@@ -80,6 +88,7 @@ class A10Inputs(transforms.DataTransformFn):
             "observation/images/base_camera",
             "observation.images.top",
             "observation.images.base_camera",
+            "observation.images.base_0_rgb",
         )
         # Wrist camera: dataset key is observation.images.right_wrist_0_rgb.
         right_raw = _first_image(
@@ -89,27 +98,35 @@ class A10Inputs(transforms.DataTransformFn):
             "observation.images.right",
             "observation.images.right_wrist_0_rgb",
         )
+        left_raw = None
+        if self.action_dim == 14:
+            left_raw = _first_image(
+                data,
+                "observation/images/left",
+                "observation/images/left_wrist_0_rgb",
+                "observation.images.left",
+                "observation.images.left_wrist_0_rgb",
+            )
+            if any(image is None for image in (primary_base_raw, left_raw, right_raw)):
+                raise KeyError("Dual-arm A10 requires top, left wrist, and right wrist images")
         ref_raw = primary_base_raw if primary_base_raw is not None else right_raw
-        if ref_raw is None:
-            ref_hwc = np.zeros((224, 224, 3), dtype=np.uint8)
-        else:
-            ref_hwc = _parse_image(ref_raw)
+        ref_hwc = np.zeros((224, 224, 3), dtype=np.uint8) if ref_raw is None else _parse_image(ref_raw)
 
         top_hwc = (
             _parse_image(primary_base_raw) if primary_base_raw is not None else np.zeros_like(ref_hwc)
         )
         right_hwc = _parse_image(right_raw) if right_raw is not None else np.zeros_like(ref_hwc)
-        left_hwc = np.zeros_like(ref_hwc)
+        left_hwc = _parse_image(left_raw) if left_raw is not None else np.zeros_like(ref_hwc)
 
         match self.model_type:
             case _model.ModelType.PI0 | _model.ModelType.PI05:
                 names = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
                 images = (top_hwc, left_hwc, right_hwc)
-                image_masks = (primary_base_raw is not None, np.False_, right_raw is not None)
+                image_masks = (primary_base_raw is not None, left_raw is not None, right_raw is not None)
             case _model.ModelType.PI0_FAST:
                 names = ("base_0_rgb", "base_1_rgb", "wrist_0_rgb")
                 images = (top_hwc, left_hwc, right_hwc)
-                image_masks = (primary_base_raw is not None, np.False_, right_raw is not None)
+                image_masks = (primary_base_raw is not None, left_raw is not None, right_raw is not None)
             case _:
                 raise ValueError(f"Unsupported model type: {self.model_type}")
 
@@ -125,9 +142,9 @@ class A10Inputs(transforms.DataTransformFn):
         if "actions" in data:
             actions = np.asarray(data["actions"], dtype=np.float32)
 
-            if actions.ndim != 2 or actions.shape[1] != 7:
+            if actions.ndim != 2 or actions.shape[1] != self.action_dim:
                 raise ValueError(
-                    f"Expected actions to have shape [T, 7], got {actions.shape}"
+                    f"Expected actions to have shape [T, {self.action_dim}], got {actions.shape}"
                 )
 
             inputs["actions"] = actions.copy()
@@ -144,11 +161,17 @@ class A10Inputs(transforms.DataTransformFn):
 class A10Outputs(transforms.DataTransformFn):
     """Returns only valid A10 action dimensions."""
 
+    action_dim: int = 7
+
+    def __post_init__(self):
+        if self.action_dim not in (7, 14):
+            raise ValueError("A10 action_dim must be 7 or 14")
+
     def __call__(self, data: dict) -> dict:
         actions = np.asarray(data["actions"], dtype=np.float32)
 
-        if actions.ndim != 2:
-            raise ValueError(f"Expected actions to have shape [T, 7+], got {actions.shape}")
+        if actions.ndim != 2 or actions.shape[1] < self.action_dim:
+            raise ValueError(f"Expected actions shape [T, {self.action_dim}+], got {actions.shape}")
 
-        return {"actions": actions[:, :7]}
+        return {"actions": actions[:, :self.action_dim]}
 

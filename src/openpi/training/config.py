@@ -17,12 +17,11 @@ import openpi.models.model as _model
 import openpi.models.pi0_config as pi0_config
 import openpi.models.pi0_fast as pi0_fast
 import openpi.models.tokenizer as _tokenizer
-import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.a10_policy as a10_policy
+import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.shared.download as _download
-import openpi.shared.nnx_utils as nnx_utils
 import openpi.shared.normalize as _normalize
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
 import openpi.training.misc.roboarena_config as roboarena_config
@@ -458,10 +457,11 @@ class LeRobotDROIDDataConfig(DataConfigFactory):
 @dataclasses.dataclass(frozen=True)
 class LeRobotA10DataConfig(DataConfigFactory):
     """Data config for a custom A10 LeRobot dataset."""
+    action_dim: int = 7
     # If True, derive action targets from future robot states instead of dataset "action".
     # This is useful when recorded actions are missing/noisy but state trajectories are reliable.
     use_state_as_action_targets: bool = True
-    # If True, convert first 6 dims (joints) to deltas and keep final gripper dim absolute.
+    # If True, convert each arm's 6 joints to deltas and keep its gripper absolute.
     use_delta_joint_actions: bool = True
     # Default action sequence keys when use_state_as_action_targets is False.
     action_sequence_keys: Sequence[str] = ("action",)
@@ -477,6 +477,8 @@ class LeRobotA10DataConfig(DataConfigFactory):
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        if self.action_dim not in (7, 14):
+            raise ValueError("A10 action_dim must be 7 or 14")
         if self.use_state_as_action_targets:
             action_key = "observation.state"
             action_sequence_keys = ("observation.state",)
@@ -495,12 +497,12 @@ class LeRobotA10DataConfig(DataConfigFactory):
             ]
         )
         data_transforms = _transforms.Group(
-            inputs=[a10_policy.A10Inputs(model_type=model_config.model_type)],
-            outputs=[a10_policy.A10Outputs()],
+            inputs=[a10_policy.A10Inputs(model_type=model_config.model_type, action_dim=self.action_dim)],
+            outputs=[a10_policy.A10Outputs(action_dim=self.action_dim)],
         )
         if self.use_delta_joint_actions:
-            # A10 is [joint_1..joint_6, gripper], so only joints become deltas.
-            delta_action_mask = _transforms.make_bool_mask(6, -1)
+            # Each arm is [joint_1..joint_6, gripper]; grippers stay absolute.
+            delta_action_mask = _transforms.make_bool_mask(*((6, -1) * (self.action_dim // 7)))
             data_transforms = data_transforms.push(
                 inputs=[_transforms.DeltaActions(delta_action_mask)],
                 outputs=[_transforms.AbsoluteActions(delta_action_mask)],
@@ -1013,6 +1015,46 @@ _CONFIGS = [
         batch_size=8,
     ),
     #
+    # Dual-arm A10 cloth-folding pipeline. Physical order: left 7, then right 7.
+    TrainConfig(
+        name="pi05_a10_dual_finetune",
+        exp_name="a10_dua_1113_fold_h30",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            action_dim=32,
+            action_horizon=30,
+            max_token_len=128,
+        ),
+        data=LeRobotA10DataConfig(
+            repo_id="dataset/a10_dua_1113_v21",
+            action_dim=14,
+            base_config=DataConfig(prompt_from_task=False),
+            use_state_as_action_targets=True,
+            use_delta_joint_actions=True,
+            default_prompt="Fold the garment neatly using both arms.",
+            image_repack=(
+                ("observation/images/top", "observation.images.base_0_rgb"),
+                ("observation/images/left", "observation.images.left_wrist_0_rgb"),
+                ("observation/images/right", "observation.images.right_wrist_0_rgb"),
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        # Short adaptation run; override explicitly for real task training.
+        num_train_steps=10,
+        log_interval=1,
+        save_interval=10,
+        keep_period=10,
+        batch_size=2,
+        num_workers=0,
+        wandb_enabled=False,
+    ),
     # ALOHA Sim configs. This config is used to demonstrate how to train on a simple simulated environment.
     #
     TrainConfig(
