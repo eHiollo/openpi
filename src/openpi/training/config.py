@@ -1055,6 +1055,45 @@ _CONFIGS = [
         num_workers=0,
         wandb_enabled=False,
     ),
+    TrainConfig(
+        name="pi05_cloth_folding_04",
+        exp_name="black_cloth_50k",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            action_dim=32,
+            action_horizon=30,
+            max_token_len=128,
+        ),
+        data=LeRobotA10DataConfig(
+            repo_id="dataset/cloth_folding_04_v21",
+            action_dim=14,
+            base_config=DataConfig(prompt_from_task=False),
+            use_state_as_action_targets=True,
+            use_delta_joint_actions=True,
+            default_prompt="fold the black cloth using both arms",
+            image_repack=(
+                ("observation/images/top", "observation.images.base_0_rgb"),
+                ("observation/images/left", "observation.images.left_wrist_0_rgb"),
+                ("observation/images/right", "observation.images.right_wrist_0_rgb"),
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        # Dedicated black-cloth run; retain each scheduled checkpoint.
+        num_train_steps=50_000,
+        log_interval=10,
+        save_interval=10_000,
+        keep_period=10_000,
+        batch_size=4,
+        num_workers=0,
+        wandb_enabled=False,
+    ),
     # ALOHA Sim configs. This config is used to demonstrate how to train on a simple simulated environment.
     #
     TrainConfig(
